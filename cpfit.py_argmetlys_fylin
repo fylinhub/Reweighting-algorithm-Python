@@ -1,0 +1,402 @@
+#!/usr/bin/python
+# optimization of force field parameters from condensed phase simulation via reweighting
+# Special version for joint fitting of lys, arg, met, fylin 2018
+
+import sys, string
+import math
+from math import sqrt, pi, cos
+import random
+
+def hist(a,b):
+        start=-180.0-7.5
+        binnumber=24
+        binsize=360/binnumber
+        binstart=[]
+        binstop=[]
+        bincount=[]
+        for i in range(binnumber):
+             binstart.append(start+binsize*i)
+             binstop.append(start++binsize+binsize*i)
+             bincount.append(0)
+        for j in range(len(a)):
+            n1=a[j]
+            for i in range(binnumber):
+                if n1 >= binstart[i] and n1 < binstop[i]:
+                    bincount[i]+=b[j]
+            if n1 >= binstop[binnumber-1] and n1 <= 180.0:
+                bincount[0]+=b[j]
+        #bincount=bincount/len(a)
+        return bincount
+        
+def hist2(a,b):
+# for those chi2's that are symmetric
+        start=-180.0-7.5
+        binnumber=24
+        binsize=360/binnumber
+        binstart=[]
+        binstop=[]
+        bincount=[]
+        for i in range(binnumber):
+             binstart.append(start+binsize*i)
+             binstop.append(start++binsize+binsize*i)
+             bincount.append(0)
+        for j in range(len(a)):
+            n1=abs(a[j])
+            for i in range(binnumber):
+                if n1 >= binstart[i] and n1 < binstop[i]:
+                    bincount[i]+=b[j]
+            if n1 >= binstop[binnumber-1] and n1 <= 180.0:
+                bincount[0]+=b[j]
+        return bincount
+        
+def oc(x,y):
+        c1=0.0
+        c2=0.0
+        c3=0.0
+        for i in range(len(x)):
+            c1+=x[i]*y[i]
+            c2+=x[i]*x[i]
+            c3+=y[i]*y[i]
+        c=c1/sqrt(c2*c3)
+        return c
+
+def targeth(obs,weight):    ## met
+        tchi1=oc(hist(obs[0],weight),hchi1pdbh)
+        tchi2=oc(hist2(obs[1],weight),hchi2pdbh)
+        targ=targetweight[0]*(1-tchi1)+targetweight[1]*(1-tchi2)    
+        return tchi1, tchi2, targ
+ 
+def targett(obs,weight):   ## lys
+        tchi1=oc(hist(obs[0],weight),hchi1pdbt)
+        tchi2=oc(hist2(obs[1],weight),hchi2pdbt)
+        targ=targetweight[0]*(1-tchi1)+targetweight[1]*(1-tchi2)    
+        return tchi1, tchi2, targ
+
+def targetm(obs,weight):  ## met    
+        tchi1=oc(hist(obs[0],weight),hchi1pdbm)   
+        tchi2=oc(hist2(obs[1],weight),hchi2pdbm)  
+        targ=targetweight[0]*(1-tchi1)+targetweight[1]*(1-tchi2)    
+        return tchi1, tchi2, targ
+
+
+def target_init():
+    global hchi1pdbh, hchi2pdbh, hchi1pdbt, hchi2pdbt, hchi1pdbm, hchi2pdbm
+### -----------------------------------    
+    try:
+        pdbhsurveyfile = open('arg_chi1chi2.csv','r')
+    except IOError:              
+        print ('Files do not exist!\n')
+    plainweight=[]
+    chi1pdb=[]
+    chi2pdb=[]
+    for line in pdbhsurveyfile.readlines():
+            chi1pdb.append(float(string.split(line)[0]))
+            chi2pdb.append(float(string.split(line)[1]))
+            plainweight.append(1)
+    hchi1pdbh=hist(chi1pdb,plainweight)
+    hchi2pdbh=hist2(chi2pdb,plainweight)
+### -----------------------------------    
+    try:
+        pdbtsurveyfile = open('lys_chi1chi2.csv','r')
+    except IOError:                     
+        print ('Files do not exist!\n')
+    plainweight=[]
+    chi1pdb=[]
+    chi2pdb=[]
+    for line in pdbtsurveyfile.readlines():
+            chi1pdb.append(float(string.split(line)[0]))
+            chi2pdb.append(float(string.split(line)[1]))
+            plainweight.append(1)
+    hchi1pdbt=hist(chi1pdb,plainweight)
+    hchi2pdbt=hist2(chi2pdb,plainweight)
+### -----------------------------------   
+    try:
+        pdbmsurveyfile = open('met_chi1chi2.csv','r')
+    except IOError:                     
+        print ('Files do not exist!\n')
+    plainweight=[]
+    chi1pdb=[]
+    chi2pdb=[]
+    for line in pdbmsurveyfile.readlines():
+            chi1pdb.append(float(string.split(line)[0]))
+            chi2pdb.append(float(string.split(line)[1]))
+            plainweight.append(1)
+    hchi1pdbm=hist(chi1pdb,plainweight)
+    hchi2pdbm=hist2(chi2pdb,plainweight)
+    return
+
+def weighting(coor,kpara, coormappara, e0):
+    invkT=1.0/(0.0019872041*300)
+    w=[]
+    for i in range(nframe):
+        en=0.0
+        for j in range(ncoor):
+            jj=coormappara[j]
+            en = en + e_dihe([kpara[jj],kpara[jj+1],kpara[jj+2]],coor[j][i])
+        w.append(math.exp((e0[i]-en)*invkT))
+    q=weightingcheck(w)
+    return w, q
+
+def energy(coor,kpara, coormappara):
+    e=[]
+    for i in range(nframe):
+        e1=0.0
+        for j in range(ncoor):
+            jj=coormappara[j]
+            e1 = e1 + e_dihe([kpara[jj],kpara[jj+1],kpara[jj+2]],coor[j][i])
+        e.append(e1)
+    return e
+
+def weightingcheck(a):
+# top 1% should have less than 20% weight
+    top=int(topcutoffpara[0]) # this is now top 10%, very strict criteria
+    cutoff=float(topcutoffpara[1]) # 0.3,  0.2
+    top=-1*top
+    b=sorted(a)[top:]
+    c=sum(b)/sum(a)
+    return bool(c<cutoff)
+
+def weighting_init(coor):
+# to initiaze dynamical weighting
+    for i1,a in enumerate(coor):
+        for i2,b in enumerate(a):
+            cosb=cosfun(b)
+            coor[i1][i2]=cosb
+    return
+
+def cosfun(angle):
+# pre-compute the the cosine function since they are used over and over again
+    return [1.0+cos((angle-180.0)*pi/180.0),1.0+cos((2.0*angle-180.0)*pi/180.0),1.0+cos((3.0*angle-180.0)*pi/180.0)]
+
+def e_dihe(k,cosangle):
+# return the dihedral energy for one dihedral
+    return k[0]*cosangle[0]+k[1]*cosangle[1]+k[2]*cosangle[2]
+
+
+if __name__ == "__main__":
+    # handling i/o
+    debug=0
+    try:
+        parafile = open(sys.argv[1],'r')
+    except IOError:
+        print ('Files do not exist!\n')
+    try:
+        coorhfile = open(sys.argv[2],'r')  ## arg-analized file
+    except IOError:
+        print ('Files do not exist!\n')
+    try:
+        coortfile = open(sys.argv[3],'r')  ## lys-analized file
+    except IOError:
+        print ('Files do not exist!\n')    
+    try:
+        coormfile = open(sys.argv[4],'r')  ## met-analized file
+    except IOError:
+        print ('Files do not exist!\n')    
+    try:
+        observehfile = open(sys.argv[5],'r') # arg-observed file
+    except IOError:                     
+        print ('Files do not exist!\n')
+    try:
+        observetfile = open(sys.argv[6],'r') # lys-observed file
+    except IOError:                     
+        print ('Files do not exist!\n')
+    try:
+        observemfile = open(sys.argv[7],'r') # met-observed file
+    except IOError:                     
+        print ('Files do not exist!\n')
+    try:
+        writefile = open(sys.argv[8],'w')  # output file
+    except IOError:                    
+        print ('Files do not exist!\n')
+
+    # read parameter files
+    para_base=map(float,string.split(parafile.readline()))
+    para_0=para_base
+    if debug: print para_0
+
+    # read coordinates files (with respect to energy evaluation)
+    global ncoor, nobs, nframe, coormapparah, coormapparat, coormapparam, tagetweight, topcutoffpara
+
+    ## line2: read kmax for dihedral
+    kmax=map(float,string.split(parafile.readline()))   
+ 
+    ## line2: read kmin for dihedral
+    kmin=map(float,string.split(parafile.readline()))   
+ 
+    ## line3: dihedral index, parameters for groups
+    coormapparah=[0,3,6]   #met
+    coormapparat=[0,3,6]   #lys
+    coormapparam=[3,6,9]   #met
+
+    ## line4: read weight for chi1 chi2
+    targetweight=map(int,string.split(parafile.readline()))   
+
+    # line5 read temperature
+    temp_from_para=map(int,string.split(parafile.readline()))  
+
+    ## line6: read steps
+    step_from_para=map(int,string.split(parafile.readline()))   
+
+    ## line7: read top, cutoff values 
+    topcutoffpara=map(float,string.split(parafile.readline()))  
+    ncoor=3
+## -------------------------------------------------------------   
+    coorh=[]
+    for i in range(ncoor):
+        coorh.append([])  
+    for line in coorhfile.readlines():
+        for i in range(ncoor):
+            coorh[i].append(float(string.split(line)[i]))
+## -------------------------------------------------------------   
+    coort=[]
+    for i in range(ncoor):
+        coort.append([])  
+    for line in coortfile.readlines():
+        for i in range(ncoor):
+            coort[i].append(float(string.split(line)[i]))
+## -------------------------------------------------------------   
+    coorm=[]
+    for i in range(ncoor):
+        coorm.append([])  
+    for line in coormfile.readlines():
+        for i in range(ncoor):
+            coorm[i].append(float(string.split(line)[i]))
+## -------------------------------------------------------------   
+    nframe=len(coorh[0])
+## -------------------------------------------------------------   
+    nobs=2 ### 2 ### len(targetweight)  ### correspond to chi1/chi2=>2, or chi1=>1
+    obsh=[]
+    for i in range(nobs):
+        obsh.append([])
+    for line in observehfile.readlines():
+        for i in range(nobs):
+            obsh[i].append(float(string.split(line)[i]))
+    obst=[]
+    for i in range(nobs):
+        obst.append([])
+    for line in observetfile.readlines():
+        for i in range(nobs):
+            obst[i].append(float(string.split(line)[i]))
+    obsm=[]
+    for i in range(nobs):
+        obsm.append([])
+    for line in observemfile.readlines():
+        for i in range(nobs):
+            obsm[i].append(float(string.split(line)[i]))
+## -------------------------------------------------------------   
+    target_init()
+## -------------------------------------------------------------   
+    weighting_init(coort) ## arg
+    weighting_init(coorh) ## lys
+    weighting_init(coorm) ## met
+
+    estarth=energy(coorh,para_base, coormapparah)
+    estartt=energy(coort,para_base, coormapparat)
+    estartm=energy(coorm,para_base, coormapparam)
+
+    para_old=list(para_0)
+## -------------------------------------------------------------   
+    weighth_new,qweighth=weighting(coorh,para_old,coormapparah, estarth)  ## arg
+    weightt_new,qweightt=weighting(coort,para_old,coormapparat, estartt)  ## lys
+    weightm_new,qweightm=weighting(coorm,para_old,coormapparam, estartm)  ## met
+## -------------------------------------------------------------   
+
+    t1, t2 , t3 = targeth(obsh,weighth_new)  ## arg
+    t4, t5 , t6 = targett(obst,weightt_new)  ## lys
+    t7, t8 , t9 = targetm(obsm,weightm_new)  ## met
+
+    print "initial arg chi1 chi2: ",  round(t1,3), round(t2,3)
+    print "initial lys chi1 chi2: ",  round(t4,3), round(t5,3)
+    print "initial met chi1 chi2: ",  round(t7,3), round(t8,3)
+
+### -----------------------------------   
+    hchi1_best = t1
+    hchi2_best = t2
+    tchi1_best = t4
+    tchi2_best = t5
+    mchi1_best = t7
+    mchi2_best = t8
+### -----------------------------------   
+    tar_old=t3+t6+t9
+    tar_best=tar_old
+    prob=0
+    accepted=1
+  
+    ###### do the monte carlo simulated annealing
+    tempr0 = temp_from_para[0] # 200.0
+    print "%s" % ( "Starting Monte Carlo fitting" )
+    print "%11s%11s%11s%11s%11s%11s" % ( "MC step", "tempr", "p", "accepted?", "RMSE", "RMSE_best" )
+    step = 0
+    nstep = step_from_para[0] ##15000
+    while step < nstep:
+        tempr = tempr0 * math.exp(-1.0* ( float( step ) / ( float( nstep ) / 4.0 ) ))
+        para_new=list(para_old)
+        for i in range(len(para_new)):
+            a = para_new[i] + random.uniform(-0.5, 0.5)
+            if a > kmax[i]: a=kmax[i]
+            if a < kmin[i]: a=kmin[i]
+            para_new[i] = a
+### -----------------------------------   
+        weighth_new,qweighth=weighting(coorh,para_new,coormapparah, estarth)
+        weightt_new,qweightt=weighting(coort,para_new,coormapparat, estartt)
+        weightt_new,qweightm=weighting(coorm,para_new,coormapparam, estartm)
+### -----------------------------------   
+        if qweighth == True and qweightt == True and qweightm == True:
+            t1, t2 , t3 = targeth(obsh,weighth_new)
+            t4, t5 , t6 = targett(obst,weightt_new)
+            t7, t8 , t9 = targetm(obsm,weightm_new)
+            tar_new=t3+t6+t9 
+            dtar= tar_new - tar_old
+            if step == 0:
+                prob  = 0.0  # required to prevent overflow
+            else:
+                dtar= tar_new - tar_old
+                boltz = -1.0 * dtar / ( 0.001987 * tempr )
+                prob  = math.exp( boltz )
+            prob0 = random.uniform(0.0,1.0)
+            if dtar < 0.0:
+                accepted = 1
+                prob = 1.0
+            elif prob0 < prob:
+                accepted = 1
+            else:
+                accepted = 0
+
+            if accepted:
+                tar_old = tar_new
+                para_old=list(para_new) # memory inefficient?
+                if tar_new < tar_best:
+                    tar_best = tar_new
+### -----------------------------------   
+                    hchi1_best = t1
+                    hchi2_best = t2
+                    tchi1_best = t4
+                    tchi2_best = t5
+                    mchi1_best = t7
+                    mchi2_best = t8
+### -----------------------------------   
+                    para_best=list(para_new)
+                #here try to trace the improvement history
+                    writefile.write(str(step)+' ')
+                    
+                    for p in para_best:
+                        writefile.write(str(round(p,3)) +' ')
+                    
+                    print "arg chi1: ", str(round(hchi1_best,2)), " arg chi2:",  str(round(hchi2_best,2)), ' lys chi1: ', str(round(tchi1_best,2)), ' lys chi2: ', str(round(tchi2_best,2)), ' met chi1: ', str(round(mchi1_best,2)), ' met chi2: ', str(round(mchi2_best,2)), '\n' 
+                    writefile.write('arg chi1:'+str(round(hchi1_best,2))+' arg chi2:'+str(round(hchi2_best,2))+ ' lys chi1:'+str(round(tchi1_best,2))+' lys chi2:'+str(round(tchi2_best,2))+' met chi1:'+str(round(mchi1_best,2))+' met chi2:'+str(round(mchi2_best,2))+'\n') 
+        if ( step % 100 ) == 0:
+            print "%11i%11.1f%11.4f%11i%11.2f%11.2f%11.2f%11.2f%11.2f%11.2f%11.2f%11.2f" % ( step, tempr, prob, accepted, tar_new, tar_best, hchi1_best, hchi2_best, tchi1_best, tchi2_best, mchi1_best, mchi2_best )
+        step = step + 1
+    print "%11i%11.1f%11.4f%11i%11.2f%11.2f%11.2f%11.2f%11.2f%11.2f%11.2f%11.2f" % ( step, tempr, prob, accepted, tar_new, tar_best, hchi1_best, hchi2_best, tchi1_best, tchi2_best, mchi1_best, mchi2_best )
+
+    for p in para_best:
+	if p >= 0 :
+	    print round(p,3), "   180"
+	else:
+            p=-p
+	    print round(p,3), "     0"
+    writefile.write('arg chi1: '+str(round(hchi1_best,2))+' arg chi2: '+str(round(hchi2_best,2))+' lys chi1: '+str(round(tchi1_best,2))+' lys chi2: '+str(round(tchi2_best,2))+ ' met chi1: '+str(round(mchi1_best,2))+' met chi2: '+str(round(mchi2_best,2)))
+
+
+
+
