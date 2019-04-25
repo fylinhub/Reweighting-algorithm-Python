@@ -16,7 +16,7 @@ def hist(a,b):
         bincount=[]
         for i in range(binnumber):
              binstart.append(start+binsize*i)
-             binstop.append(start++binsize+binsize*i)
+             binstop.append(start+binsize+binsize*i)
              bincount.append(0)
         for j in range(len(a)):
             n1=a[j]
@@ -38,7 +38,7 @@ def hist2(a,b):
         bincount=[]
         for i in range(binnumber):
              binstart.append(start+binsize*i)
-             binstop.append(start++binsize+binsize*i)
+             binstop.append(start+binsize+binsize*i)
              bincount.append(0)
         for j in range(len(a)):
             n1=abs(a[j])
